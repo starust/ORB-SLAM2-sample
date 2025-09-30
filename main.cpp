@@ -1,73 +1,78 @@
 #include <opencv2/opencv.hpp>
 #include <iostream>
-#include <vector>
+#include <fstream>
 using namespace cv;
 using namespace std;
 
+void saveKeypoints(const vector<KeyPoint>& kps, int idx) {
+    ofstream f("results/keypoints_" + to_string(idx) + ".csv");
+    f << "id,u,v\n";
+    for (size_t i = 0; i < kps.size(); i++) {
+        f << i << "," << kps[i].pt.x << "," << kps[i].pt.y << "\n";
+    }
+}
+
+void saveMatches(const vector<KeyPoint>& k1, const vector<KeyPoint>& k2,
+                 const vector<DMatch>& matches, int i, int j) {
+    ofstream f("results/matches_" + to_string(i) + "_" + to_string(j) + ".csv");
+    f << "id_i,u_i,v_i,id_j,u_j,v_j,distance\n";
+    for (const auto& m : matches) {
+        const auto& p1 = k1[m.queryIdx].pt;
+        const auto& p2 = k2[m.trainIdx].pt;
+        f << m.queryIdx << "," << p1.x << "," << p1.y << ","
+          << m.trainIdx << "," << p2.x << "," << p2.y << ","
+          << m.distance << "\n";
+    }
+}
+
 int main() {
-    // 图片路径
     vector<string> filenames = {
-        "images/img1.jpg",
-        "images/img2.jpg",
-        "images/img3.jpg",
-        "images/img4.jpg",
-        "images/img5.jpg",
-        "images/img6.jpg",
+        "images/img1.jpg", "images/img2.jpg", "images/img3.jpg",
+        "images/img4.jpg", "images/img5.jpg", "images/img6.jpg",
         "images/img7.jpg"
     };
 
-    // ORB 特征提取器
-    Ptr<ORB> orb = ORB::create(3000); // 提取 3000 个特征点
-
-    // BFMatcher 用汉明距离
+    Ptr<ORB> orb = ORB::create(3000);
     BFMatcher matcher(NORM_HAMMING);
 
-    // 顺序处理相邻图片对
-    for (size_t i = 0; i + 1 < filenames.size(); i++) {
-        Mat img1 = imread(filenames[i], IMREAD_GRAYSCALE);
-        Mat img2 = imread(filenames[i + 1], IMREAD_GRAYSCALE);
+    // 确保 results 文件夹存在
+    system("mkdir results");
 
-        if (img1.empty() || img2.empty()) {
-            cout << "❌ 无法读取 " << filenames[i] << " 或 " << filenames[i+1] << endl;
-            continue;
+    vector<vector<KeyPoint>> all_keypoints;
+    vector<Mat> all_desc;
+
+    // 提取每张图的特征点和描述子
+    for (size_t i = 0; i < filenames.size(); i++) {
+        Mat img = imread(filenames[i], IMREAD_GRAYSCALE);
+        if (img.empty()) {
+            cerr << "无法读取图像 " << filenames[i] << endl;
+            return -1;
         }
+        vector<KeyPoint> kps;
+        Mat desc;
+        orb->detectAndCompute(img, Mat(), kps, desc);
+        all_keypoints.push_back(kps);
+        all_desc.push_back(desc);
 
-        // 提取 ORB 特征点与描述子
-        vector<KeyPoint> keypoints1, keypoints2;
-        Mat descriptors1, descriptors2;
-        orb->detectAndCompute(img1, Mat(), keypoints1, descriptors1);
-        orb->detectAndCompute(img2, Mat(), keypoints2, descriptors2);
+        // 保存关键点
+        saveKeypoints(kps, i+1);
+        cout << "保存 keypoints_" << i+1 << ".csv" << endl;
+    }
 
-        cout << "✅ " << filenames[i] << " vs " << filenames[i+1]
-             << " | keypoints1=" << keypoints1.size()
-             << ", keypoints2=" << keypoints2.size() << endl;
-
-        // knnMatch 匹配
+    // 相邻帧匹配
+    for (size_t i = 0; i < filenames.size()-1; i++) {
         vector<vector<DMatch>> knn_matches;
-        matcher.knnMatch(descriptors1, descriptors2, knn_matches, 2);
+        matcher.knnMatch(all_desc[i], all_desc[i+1], knn_matches, 2);
 
-        // ratio test 过滤
-        const float ratio_thresh = 0.75f;
         vector<DMatch> good_matches;
-        for (size_t k = 0; k < knn_matches.size(); k++) {
-            if (knn_matches[k][0].distance < ratio_thresh * knn_matches[k][1].distance) {
-                good_matches.push_back(knn_matches[k][0]);
+        for (auto& m : knn_matches) {
+            if (m[0].distance < 0.75 * m[1].distance) {
+                good_matches.push_back(m[0]);
             }
         }
 
-        cout << "   匹配数量: " << good_matches.size() << endl;
-
-        // 绘制匹配结果
-        Mat img_matches;
-        drawMatches(img1, keypoints1, img2, keypoints2, good_matches, img_matches,
-                    Scalar(0, 255, 0), Scalar(255, 0, 0),
-                    vector<char>(), DrawMatchesFlags::NOT_DRAW_SINGLE_POINTS);
-
-        imshow("ORB Matches", img_matches);
-
-        // 按任意键切换到下一对，按 ESC 退出
-        int key = waitKey(0);
-        if (key == 27) break; // ESC 退出
+        saveMatches(all_keypoints[i], all_keypoints[i+1], good_matches, i+1, i+2);
+        cout << "保存 matches_" << i+1 << "_" << i+2 << ".csv" << endl;
     }
 
     return 0;
